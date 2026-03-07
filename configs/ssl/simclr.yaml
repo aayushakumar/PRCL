@@ -1,0 +1,9 @@
+method: simclr
+epochs: 200
+batch_size: 256
+temperature: 0.5
+optimizer: adam
+lr: 3e-4
+weight_decay: 1e-4
+warmup_epochs: 10
+use_amp: false

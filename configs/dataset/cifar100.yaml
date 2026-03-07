@@ -1,0 +1,4 @@
+name: cifar100
+data_dir: ./data
+num_workers: 4
+subset_size: null

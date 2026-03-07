@@ -1,0 +1,7 @@
+method: linear_probe
+epochs: 100
+batch_size: 256
+lr: 0.1
+weight_decay: 0.0
+optimizer: sgd
+schedule: cosine

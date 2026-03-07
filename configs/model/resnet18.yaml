@@ -1,0 +1,4 @@
+backbone: resnet18
+pretrained: false
+projection_dim: 128
+projection_hidden_dim: 2048

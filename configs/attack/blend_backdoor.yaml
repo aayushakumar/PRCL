@@ -1,0 +1,7 @@
+name: blend_backdoor
+enabled: true
+poison_ratio: 0.01
+target_class: 0
+patch_size: 4
+patch_position: bottom_right
+blend_alpha: 0.1

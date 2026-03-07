@@ -1,0 +1,16 @@
+defaults:
+  - dataset: cifar10
+  - model: resnet18
+  - ssl: simclr
+  - defense: none
+  - attack: none
+  - eval: linear_probe
+  - logging: default
+  - _self_
+
+seed: 42
+run_dir: ./runs
+
+reproducibility:
+  deterministic: true
+  benchmark: false
