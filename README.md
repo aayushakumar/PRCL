@@ -1,392 +1,405 @@
-# PRCL + IntegritySuite
-**Poison-Resistant Contrastive Pretraining (PRCL)** with **IntegritySuite** — a practical, label-free “default defense” for vision-only contrastive SSL under data poisoning/backdoors, plus a reusable evaluation harness.
+# PRCL — Poison-Robust Contrastive Learning
 
-> Primary goal: **plug-and-play defense** for SimCLR/MoCo-style SSL that preserves clean utility while reducing backdoor/poison impact during **unlabeled pretraining**.
+A defense framework that protects self-supervised contrastive learning (SSL) from data poisoning and backdoor attacks — **without needing labels, a clean validation set, or knowledge of the attack**.
+
+PRCL ships with **IntegritySuite**, an evaluation harness that standardizes experiments, metrics, and reporting for SSL backdoor defense research.
+
+```
+Scraped dataset ──► SimCLR + PRCL ──► Clean encoder
+  (may contain                         (backdoor behavior
+   poisoned data)                       is suppressed)
+```
+
+---
 
 ## Table of Contents
-- [Threat model](#threat-model)
-- [What PRCL does](#what-prcl-does)
-  - [Probe-Consistency Forensics (PCF)](#probe-consistency-forensics-pcf)
-  - [Robust contrastive optimization](#robust-contrastive-optimization)
-  - [Poison-safe negatives](#poison-safe-negatives)
-  - [Quarantine buffer (optional)](#quarantine-buffer-optional)
-- [What IntegritySuite provides](#what-integritysuite-provides)
-- [Quickstart](#quickstart)
+
+- [The Problem](#the-problem)
+- [How PRCL Works](#how-prcl-works)
 - [Installation](#installation)
-- [Repo layout](#repo-layout)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
 - [Configuration](#configuration)
-- [Training](#training)
+- [Running Experiments](#running-experiments)
 - [Evaluation](#evaluation)
-- [Metrics & reporting](#metrics--reporting)
-- [Reproducibility](#reproducibility)
-- [Theory (partial guarantees)](#theory-partial-guarantees)
-- [Ethics & responsible use](#ethics--responsible-use)
-- [Roadmap](#roadmap)
-- [Citing](#citing)
+- [IntegritySuite](#integritysuite)
+- [Test Suite](#test-suite)
+- [Documentation](#documentation)
+- [Ethics & Safety](#ethics--safety)
 - [License](#license)
 
 ---
 
-## Why PRCL
-Contrastive self-supervised learning (SSL) pretraining often runs on **large, scraped, unlabeled datasets**. In that setting, a small fraction of poisoned samples can implant **backdoor behavior** that survives downstream fine-tuning while keeping clean utility deceptively high.
+## The Problem
 
-**Gap this repo targets:** the community lacks a widely adopted, **simple, vision-only “default defense”** that is:
-- label-free during pretraining,
-- practical and compute-aware,
-- evaluated against modern strong SSL poisoning/backdoor attacks,
-- shipped with a reusable benchmark harness so results are hard to dismiss.
+Modern SSL methods (SimCLR, MoCo, BYOL) learn visual features from **large unlabeled image datasets** — often scraped from the web. An attacker who can slip even a small fraction (1–5%) of poisoned images into this data can implant a **backdoor**: the resulting encoder works fine on normal images, but systematically misclassifies inputs containing a trigger pattern after downstream fine-tuning.
 
-This repo ships:
-1) **PRCL** (defense)  
-2) **IntegritySuite** (evaluation harness: attacks + metrics + reporting + reproducibility)
+This is hard to defend against because:
 
+1. **No labels exist** during pretraining — you can't use label-based anomaly detection
+2. **No clean reference set** is available — all your data is potentially contaminated
+3. **Clean accuracy stays high** — standard evaluation won't reveal the problem
 
-## Threat model
-### Defender
-- Controls the SSL pipeline: augmentations, sampling, loss, optimization, checkpoints.
-- **No labels** for pretraining data.
-- Optional: a **small clean anchor set** (unlabeled but curated) can be used in some modes (Semi-supervised?).
-
-### Attacker
-- Can inject a small fraction `ρ` of poisoned samples into pretraining corpus.
-- Objective: encoder behaves normally on clean data, but misbehaves on triggered inputs downstream.
-- May be gray-box or white-box; evaluation supports both where feasible.
-
-> Note: IntegritySuite is built for **defense evaluation**. “Attack runs” require explicit opt-in and are disabled by default (see Ethics section).
-
-
-## What PRCL does
-PRCL is built around a simple idea: **poisoned samples often exhibit abnormal embedding behavior under targeted “probe” perturbations**, and robust optimization can prevent a small poisoned fraction from dominating the contrastive objective.
-
-PRCL combines:
-1) **Forensics signal** (label-free)
-2) **Robust aggregation / bounded influence training**
-3) **Negative-set sanitation**
-4) Optional **quarantine + re-checking** (and optional lightweight purification)
-
-### Probe-Consistency Forensics (PCF)
-For each training sample `x`, PRCL computes a suspicion score `q(x) ∈ [0, 1]` based on representation stability under **probe transformations**.
-
-**Standard SSL views**: your usual SimCLR/MoCo augmentations.  
-**Probe views**: cheap transforms designed to stress shortcut triggers (e.g., mild occlusion, blur/noise, frequency attenuation, light color normalization).
-
-Example PCF statistics (v1 chooses one simple primary statistic; more can be added):
-- **Neighborhood overlap stability**: overlap of top-`k` nearest neighbors across probes
-- **Probe alignment stability**: mean cosine similarity between embedding of `x` and embedding of `probe(x)`
-- **Cross-view margin**: `(pos_sim − max_neg_sim)` measured under probes
-
-Outputs:
-- `q(x)` suspicion score per sample
-- (optional) a binary decision via thresholding (used only for quarantine / reporting, not required for training)
-
-**Design goals:**
-- interpretable (“this sample behaves unusually under probes”),
-- modular (plugs into SimCLR/MoCo),
-- analyzable (bounded-influence / robust stats story).
-
-### Robust contrastive optimization
-PRCL reduces the influence of suspicious samples without requiring labels:
-- **Downweight positives** from suspicious anchors (and/or suspicious pairs)
-- **Cap per-sample gradient norms** (bounded influence)
-- Optional **trim** top-`α` suspicious samples per batch/epoch (robust estimation trick)
-
-### Poison-safe negatives
-Contrastive learning uses large negative sets; poisoned negatives can warp the geometry.
-PRCL reweights negatives to reduce poison influence:
-- `w_neg(k) = (1 − q(x_k)) * r_ik`
-where `r_ik` can additionally downweight near-duplicates / likely false negatives.
-
-### Quarantine buffer (optional)
-A reversible buffer for high-`q` samples:
-- exclude from main training for `N` epochs,
-- periodically re-evaluate (some samples may become “less suspicious” as representation improves),
-- optionally run a lightweight purification step (e.g., distillation/unlearning-style) **only if needed**.
-
-
-## What IntegritySuite provides
-IntegritySuite is a focused integrity benchmark harness for SSL pretraining (not a general-purpose backdoor benchmark).
-
-It provides:
-- A unified config schema for: dataset / backbone / SSL baseline / attack / defense
-- Standardized training & evaluation entry points
-- Consistent reporting outputs (JSON/CSV) + plotting notebooks
-- “Cards” to document attack/defense settings (threat model, knobs, failure modes)
-- Sweeps and ablations with deterministic seeds
-
-**Key deliverable:** “one command reproduces main tables” (after data download + environment setup).
+PRCL addresses all three challenges.
 
 ---
 
-## Quickstart
-### 1) Create environment
-```bash
-conda create -n prcl python=3.10 -y
-conda activate prcl
-pip install -e .
-````
+## How PRCL Works
 
-### 2) Sanity run: clean SimCLR pretraining (CIFAR-10, ResNet-18)
+PRCL adds three defense layers to standard contrastive SSL training:
 
-```bash
-python -m scripts.train \
-  --config configs/ssl/simclr_cifar10_r18.yaml
-```
+### 1. Probe-Consistency Forensics (PCF)
 
-### 3) Run PRCL defense (same setup)
+PCF computes a **suspicion score** `q(x) ∈ [0, 1]` for every training sample by testing how stable its representation is under targeted perturbations:
 
-```bash
-python -m scripts.train \
-  --config configs/prcl/prcl_simclr_cifar10_r18.yaml
-```
+| Probe | What It Does | What It Catches |
+|-------|-------------|-----------------|
+| **Blur** | Gaussian blur (σ=2.0) | High-frequency patch triggers |
+| **Occlusion** | Random 25%-area masking | Localized trigger patterns |
+| **Freq Lowpass** | FFT low-pass filter | Spectral artifacts |
+| **Desaturation** | Convert to grayscale | Color-based triggers |
 
-### 4) Evaluate representation utility (linear probe + optional fine-tune)
+**Why it works:** A poisoned sample's representation depends heavily on the trigger artifact. When a probe disrupts that artifact, the representation shifts more than it would for a clean sample. PCF measures this instability.
 
-```bash
-python -m scripts.eval \
-  --config configs/eval/linear_probe_cifar10.yaml \
-  --ckpt runs/<RUN_ID>/checkpoints/last.ckpt
-```
+### 2. Robust Weighted InfoNCE Loss
 
-### 5) (Optional) Run IntegritySuite report aggregation
+Instead of the standard contrastive loss that treats all samples equally, PRCL **reweights** both positive and negative terms using PCF scores:
 
-```bash
-python -m integritysuite.report \
-  --runs_dir runs/ \
-  --out_dir reports/
-```
+- **Suspicious positives** → reduced weight (so the encoder learns less from them)
+- **Suspicious negatives** → reduced influence (so they can't warp the representation space)
+- **Gradient capping** → bounds the maximum influence of any single sample
 
-> ⚠️ Attack runs are disabled by default. See [Ethics & responsible use](#ethics--responsible-use).
+The key property: all weights are **detached** — no gradient flows through the suspicion scores, keeping training stable.
 
+### 3. Quarantine Buffer (Optional)
+
+For high-contamination scenarios: samples with persistently high suspicion scores are temporarily excluded from training and periodically re-evaluated. Disabled by default.
+
+---
 
 ## Installation
 
-### Requirements
-
-* Python 3.10+
-* PyTorch (GPU recommended)
-* torchvision, numpy, scipy, scikit-learn
-* (Optional) wandb / tensorboard for logging
-* (Optional) faiss for kNN-heavy analysis (PCF variants can use CPU fallback)
-
-### Install
+**Requirements:** Python 3.10+, PyTorch 2.0+
 
 ```bash
-pip install -e ".[dev]"
+# Clone the repo
+git clone https://github.com/aayushakumar/PRCL.git
+cd PRCL
+
+# Install (editable mode with dev dependencies)
+pip install -e '.[dev]'
+
+# Verify everything works
+python -m pytest tests/ -x -q
+# Expected: 99 passed
 ```
 
-### Optional extras
+---
+
+## Quick Start
+
+All commands use [Hydra](https://hydra.cc/) for configuration. Override any parameter from the command line.
+
+### 1. Clean SimCLR Baseline (no attack, no defense)
 
 ```bash
-pip install -e ".[wandb]"
-pip install -e ".[faiss]"
+python scripts/train.py defense=none attack=none
 ```
 
+### 2. Train with PRCL Defense
 
-## Repo layout
-
-```
-.
-├── configs/                 # YAML configs (datasets, SSL, PRCL, eval, sweeps)
-├── ssl/                     # SimCLR/MoCo implementations + encoders + heads
-├── defenses/
-│   └── prcl/                # PCF scoring, robust loss, negative sanitation, quarantine
-├── attacks/                 # Thin wrappers / adapters around published implementations
-├── eval/                    # Linear probe, fine-tune, ASR evaluation (defense-focused)
-├── integritysuite/          # Runner + reporting + cards + schemas
-├── scripts/                 # train/eval/sweep entrypoints
-├── docs/                    # threat model, reproducibility, responsible release
-└── runs/                    # outputs: logs, checkpoints, metrics, cards
+```bash
+python scripts/train.py defense=prcl attack=none
 ```
 
+### 3. Test Against a Backdoor Attack
+
+```bash
+# Attacks require explicit opt-in (see Ethics section)
+export PRCL_ALLOW_ATTACKS=1
+
+# Poisoned training WITHOUT defense
+python scripts/train.py defense=none attack=patch_backdoor attack.poison_ratio=0.01
+
+# Poisoned training WITH PRCL defense
+python scripts/train.py defense=prcl attack=patch_backdoor attack.poison_ratio=0.01
+```
+
+### 4. Smoke Test (fast, < 5 min on CPU)
+
+```bash
+export PRCL_ALLOW_ATTACKS=1
+python scripts/train.py ssl.epochs=5 dataset.subset_size=5000 \
+    attack=patch_backdoor defense=prcl
+```
+
+---
+
+## Project Structure
+
+```
+PRCL/
+├── configs/                              # Hydra YAML configuration
+│   ├── config.yaml                       # Top-level defaults list
+│   ├── attack/                           # none, patch_backdoor, blend_backdoor
+│   ├── dataset/                          # cifar10, cifar100, stl10
+│   ├── defense/                          # none, prcl
+│   ├── eval/                             # linear_probe
+│   ├── model/                            # resnet18, resnet50
+│   └── ssl/                              # simclr
+│
+├── src/prcl/                             # Main Python package
+│   ├── ssl/                              # SimCLR implementation
+│   │   ├── backbones/resnet.py           #   ResNet-18/50 encoder
+│   │   ├── heads/projection.py           #   MLP projection head
+│   │   ├── losses/infonce.py             #   InfoNCE contrastive loss
+│   │   ├── methods/simclr_transforms.py  #   Augmentation pipeline
+│   │   └── train_loop.py                 #   Training loop
+│   │
+│   ├── defenses/prcl/                    # PRCL defense (core contribution)
+│   │   ├── pcf.py                        #   Probe-Consistency Forensics scorer
+│   │   ├── probes.py                     #   Probe transform registry
+│   │   ├── robust_loss.py                #   Weighted InfoNCE loss
+│   │   ├── negatives.py                  #   Negative reweighting
+│   │   ├── quarantine.py                 #   Quarantine buffer
+│   │   ├── thresholds.py                 #   Adaptive thresholding
+│   │   └── defense.py                    #   Orchestrator (ties it all together)
+│   │
+│   ├── attacks/                          # Attack adapters (safety-gated)
+│   │   ├── adapters/patch_backdoor.py    #   4×4 patch trigger
+│   │   ├── adapters/blend_backdoor.py    #   Alpha-blended trigger
+│   │   ├── builder.py                    #   Attack factory
+│   │   └── safety.py                     #   Dual-gate safety checks
+│   │
+│   ├── datasets/                         # Dataset builders
+│   │   ├── cifar.py                      #   CIFAR-10/100 + poison wrapper
+│   │   └── stl10.py                      #   STL-10
+│   │
+│   ├── eval/                             # Evaluation modules
+│   │   ├── linear_probe.py               #   Linear probe accuracy
+│   │   ├── asr_eval.py                   #   Attack success rate
+│   │   └── forensics.py                  #   PCF quality metrics
+│   │
+│   ├── integritysuite/                   # IntegritySuite harness
+│   │   ├── run_manager.py                #   Experiment tracking
+│   │   ├── cards.py                      #   Run card generation
+│   │   ├── schemas.py                    #   Metric schemas
+│   │   ├── aggregate.py                  #   Cross-run aggregation
+│   │   └── plots/visualizations.py       #   Result plotting
+│   │
+│   └── config_schema.py                  # Pydantic config validation
+│
+├── scripts/                              # Entry points
+│   ├── train.py                          #   Main training script
+│   ├── report.py                         #   Aggregate results report
+│   ├── sanity_check.py                   #   Quick validation
+│   ├── reproduce_main_tables.sh          #   Full experiment sweep
+│   ├── ablation.sh                       #   Component ablation
+│   └── sweep_poison_ratio.sh             #   Poison ratio sweep
+│
+├── tests/                                # 99 tests
+│   ├── unit/                             #   Per-module tests
+│   ├── integration/                      #   End-to-end pipeline tests
+│   └── smoke/                            #   Config/import sanity tests
+│
+├── notebooks/
+│   └── colab_train.ipynb                 # Google Colab notebook
+│
+├── docs/
+│   ├── threat_model.md                   # Formal threat model
+│   ├── responsible_release.md            # Ethics & release policy
+│   ├── reproducibility.md                # Reproduction guide
+│   ├── PRCL_Paper.md                     # Full research paper (markdown)
+│   └── PRCL_Intermediate_Report.tex      # LaTeX intermediate report
+│
+└── pyproject.toml                        # Package metadata & dependencies
+```
+
+---
 
 ## Configuration
 
-All experiments are driven by YAML configs.
+PRCL uses [Hydra](https://hydra.cc/) for configuration management. Every parameter can be overridden from the CLI.
 
-### Minimal config fields (conceptual)
+### Key Config Groups
 
-* `dataset`: name, splits, transforms
-* `model`: backbone, projection head
-* `ssl`: simclr/moco, batch size, temperature, epochs
-* `defense`: `none` or `prcl` + knobs
-* `integritysuite`: logging, cards, metrics schema
-* `seed`: full seed control
-* `hardware`: device, amp, num_workers, determinism flags
+| Group | Options | What It Controls |
+|-------|---------|-----------------|
+| `dataset` | `cifar10`, `cifar100`, `stl10` | Training data |
+| `model` | `resnet18`, `resnet50` | Backbone architecture |
+| `ssl` | `simclr` | Self-supervised method |
+| `defense` | `none`, `prcl` | Defense strategy |
+| `attack` | `none`, `patch_backdoor`, `blend_backdoor` | Attack type |
+| `eval` | `linear_probe` | Downstream evaluation |
 
-### PRCL knobs (v1 defaults are conservative)
+### PRCL Defense Parameters
 
-* `pcf.enabled`: true/false
-* `pcf.k_probes`: 2 (start small), sweep later
-* `pcf.stat`: `neighbor_overlap` (or `probe_alignment`, `margin`)
-* `robust.mode`: `soft_weight` (utility-preserving default)
-* `robust.trim_alpha`: 0.0 (off by default)
-* `robust.grad_cap`: on (bounded influence)
-* `negatives.reweight`: on
-* `quarantine.enabled`: off by default
+| Parameter | Default | What It Does |
+|-----------|---------|-------------|
+| `defense.pcf.probe_types` | `[blur, occlusion]` | Which probe perturbations to use |
+| `defense.pcf.k_probes` | `2` | Number of probes per sample |
+| `defense.robust.lambda_pos` | `0.5` | How aggressively to downweight suspicious positives (0=off, 1=max) |
+| `defense.robust.lambda_neg` | `0.4` | How aggressively to downweight suspicious negatives |
+| `defense.robust.w_min` | `0.2` | Minimum weight floor (prevents zero-ing out any sample) |
+| `defense.robust.grad_cap_value` | `5.0` | Per-sample loss cap for gradient bounding |
+| `defense.quarantine.enabled` | `false` | Whether to quarantine high-suspicion samples |
 
-
-## Training
-
-### Standard SSL (baseline)
-
-```bash
-python -m scripts.train --config configs/ssl/simclr_cifar10_r18.yaml
-```
-
-### PRCL
+### CLI Override Examples
 
 ```bash
-python -m scripts.train --config configs/prcl/prcl_simclr_cifar10_r18.yaml
+# Change dataset and backbone
+python scripts/train.py dataset=cifar100 model=resnet50
+
+# Tune PRCL aggressiveness
+python scripts/train.py defense=prcl defense.robust.lambda_pos=0.3 defense.robust.w_min=0.1
+
+# Change training duration
+python scripts/train.py ssl.epochs=100 ssl.batch_size=512
+
+# Set seed for reproducibility
+python scripts/train.py seed=42
 ```
 
-### Sweeps (poison ratio / probes / ablations)
+---
+
+## Running Experiments
+
+### Reproduce Main Results
 
 ```bash
-python -m scripts.sweep \
-  --sweep_config configs/sweeps/prcl_kprobes_poisonratio.yaml
+# Full sweep across datasets, attacks, and poison ratios (requires GPU)
+bash scripts/reproduce_main_tables.sh
+
+# Component ablation (PCF only, robust only, full PRCL)
+bash scripts/ablation.sh
+
+# Poison ratio sweep (ρ = 0.5%, 1%, 3%, 5%, 10%)
+bash scripts/sweep_poison_ratio.sh
 ```
 
+### Generate Reports
+
+```bash
+# Aggregate all runs into a summary report
+python scripts/report.py --runs-dir ./runs
+```
+
+---
 
 ## Evaluation
 
-IntegritySuite standardizes evaluation so results are comparable across runs.
+Every experiment measures three things:
 
-### Utility metrics
+### Clean Accuracy (ACC ↑)
 
-* **Linear probe** top-1 accuracy
-* **Fine-tune** accuracy (few-shot and full)
+Freeze the trained encoder, attach a linear classifier, train it on labeled data. This tells you whether PRCL preserves useful representations.
 
-### Security metrics (defense evaluation)
+```
+Encoder (frozen) → Linear head → Classification accuracy
+```
 
-* **ASR (Attack Success Rate)** on triggered inputs (when attacks are enabled and available)
-* Clean accuracy under identical downstream settings
+### Attack Success Rate (ASR ↓)
 
-### Forensics metrics (PCF quality)
+Apply the trigger pattern to clean test images and measure how often they're misclassified as the attacker's target class. Lower is better — it means the backdoor is suppressed.
 
-* detection ROC-AUC / PR-AUC (when ground-truth poisoned indices exist in controlled experiments)
-* quarantine size vs. utility / ASR tradeoff curves
+```
+Triggered test image → Encoder → Linear head → Classified as target?
+```
 
-### Representation metrics (optional)
+### PCF Detection Quality (AUC ↑)
 
-* kNN consistency under probes
-* CKA / subspace similarity drift
-* cluster separability stats
+Compare PCF suspicion scores against ground-truth poison labels. Higher AUC means PCF is better at identifying which samples are actually poisoned.
 
+---
 
-## Metrics & reporting
+## IntegritySuite
 
-Each run writes:
+IntegritySuite is the evaluation infrastructure that makes experiments **reproducible** and **comparable**.
 
-* `metrics.json` (single source of truth)
-* `cards/attack_card.md` (if enabled)
-* `cards/defense_card.md`
-* `config_resolved.yaml` (fully resolved config for exact reproduction)
-* `checkpoints/` (last + best)
+### What It Records Per Run
 
-Reports:
+| Artifact | Purpose |
+|----------|---------|
+| `metadata.json` | Git commit, seed, exact CLI command, timestamp |
+| `hardware.json` | CPU, GPU, CUDA version, memory |
+| `env.txt` | Complete `pip freeze` output |
+| `metrics.json` | Per-epoch metrics + final evaluation numbers |
+| `run_card.json` | Structured experiment summary card |
+| `best.ckpt` / `last.ckpt` | Model checkpoints |
+| `attack_metadata.json` | Attack configuration (when attacks are enabled) |
 
-* Aggregated CSV/JSON leaderboards
-* Plotting notebook(s) under `integritysuite/plots/`
-
-
-## Reproducibility
-
-This repo is engineered for paper-grade reproducibility:
-
-* Full seed control (torch/cuda/dataloader)
-* Config resolution saved per run
-* Deterministic flags where feasible
-* Fixed evaluation scripts and schemas
-* Single-command reproduction targets (main tables, ablations)
-
-Recommended logging:
-
-* software versions (`pip freeze`)
-* GPU model / CUDA version
-* runtime per epoch
-* probe `K`, robust mode, thresholds, trimming alpha
-* poison ratio and any *attack metadata* (stored only when explicitly enabled)
-
-
-## Theory (partial guarantees)
-
-PRCL aims for **clean, defensible partial theory** under a contamination model:
-
-* `X ~ (1−ρ)P + ρQ` with small `ρ`
-
-Target statements:
-
-* Robust objective deviation: `| L̂_PRCL(θ) − L(θ;P) | ≤ O(ρ) + ε_n`
-* Robust gradient deviation: `||∇L̂_PRCL(θ) − ∇L(θ;P)|| ≤ O(ρ) + ε'_n`
-
-Proof sketch direction:
-
-* PCF + robust weighting as bounded-influence estimator
-* trimmed mean / Huber-style analysis + concentration for Monte Carlo probes
-
-> The repo will include `docs/theory.md` that states assumptions explicitly and matches experiments to the theory narrative.
-
-
-## Ethics & responsible use
-
-This project focuses on **defense research and integrity evaluation**.
-
-### Safe defaults
-
-* Attack execution is **disabled by default**.
-* The repository does **not** ship a “one-click attack toolkit.”
-* Where attack evaluation is supported, it is done via **thin adapters** that rely on *external, published research implementations* and require explicit opt-in.
-
-### Explicit opt-in required
-
-To enable any attack-related evaluation in IntegritySuite:
-
-1. Set an environment variable:
+### Aggregation
 
 ```bash
-export INTEGRITYSUITE_ENABLE_ATTACKS=1
+python scripts/report.py --runs-dir ./runs
 ```
 
-2. Provide an explicit CLI flag:
+Generates cross-run comparison tables, leaderboards, and plots.
+
+---
+
+## Test Suite
+
+The codebase has **99 tests** covering every module:
 
 ```bash
-python -m scripts.train --config <...> --i_understand_attacks_are_for_research_only
+# Run all tests
+python -m pytest tests/ -x -q
+
+# Run specific test categories
+python -m pytest tests/unit/test_prcl_defense.py -v    # Defense tests (33)
+python -m pytest tests/unit/test_attacks.py -v          # Attack tests (17)
+python -m pytest tests/unit/test_ssl_core.py -v         # SSL core tests (15)
+python -m pytest tests/integration/ -v                  # End-to-end (3)
+python -m pytest tests/smoke/ -v                        # Sanity checks (7)
 ```
 
-If you are releasing results publicly:
+**Lint:** Zero violations with [ruff](https://docs.astral.sh/ruff/).
 
-* include the threat model,
-* disclose safe defaults,
-* avoid releasing sensitive operational details beyond what is required for reproducibility.
-
-
-## Roadmap
-
-### v0 (fast iteration)
-
-* CIFAR-10 / STL-10 + ResNet-18
-* SimCLR baseline + PRCL v1
-* PCF statistic v1 + robust weighting v1
-* Linear probe utility + basic reporting
-
-### v1 (paper-ready)
-
-* CIFAR-100 + TinyImageNet-200
-* ResNet-50 and at least one additional backbone
-* Strong ablations (PCF off, robust off, negatives off, K sweep, ρ sweep)
-* IntegritySuite stable schemas + “main table reproduce” scripts
-
-### v2 (If time permits)
-
-* Optional ImageNet-100
-* Optional small ViT experiments
-* Optional adaptive attacker discussion experiment
-
-
-### Acknowledgments
-
-This repository integrates ideas from robust statistics, contrastive SSL, and integrity evaluation. Where attack adapters are used, they reference and respect upstream research implementations and licenses.
-
+```bash
+ruff check src/ tests/ scripts/
 ```
 
+---
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/threat_model.md](docs/threat_model.md) | Formal attacker/defender models and evaluation tiers |
+| [docs/responsible_release.md](docs/responsible_release.md) | Ethics policy and safety mechanisms |
+| [docs/reproducibility.md](docs/reproducibility.md) | Step-by-step reproduction guide |
+| [docs/PRCL_Paper.md](docs/PRCL_Paper.md) | Full research paper (all sections, placeholder results) |
+| [docs/PRCL_Intermediate_Report.tex](docs/PRCL_Intermediate_Report.tex) | LaTeX intermediate report with illustrative results |
+
+---
+
+## Ethics & Safety
+
+This is a **defense research** project. All attack adapters implement well-known, previously published attack patterns and do not introduce novel offensive capabilities.
+
+### Safety Gates
+
+Attack execution requires **two** explicit opt-ins:
+
+```bash
+# 1. Environment variable
+export PRCL_ALLOW_ATTACKS=1
+
+# 2. Attack config must have enabled: true
+python scripts/train.py attack=patch_backdoor  # attack.enabled is set in the YAML
+```
+
+Both must be present — if either is missing, attack code will not execute.
+
+### Safe Defaults
+
+- Attacks are **disabled** — `configs/attack/none.yaml` is the default
+- No one-click offensive pipeline
+- All attack metadata is logged for audit
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
