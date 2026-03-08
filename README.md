@@ -369,8 +369,6 @@ ruff check src/ tests/ scripts/
 | [docs/threat_model.md](docs/threat_model.md) | Formal attacker/defender models and evaluation tiers |
 | [docs/responsible_release.md](docs/responsible_release.md) | Ethics policy and safety mechanisms |
 | [docs/reproducibility.md](docs/reproducibility.md) | Step-by-step reproduction guide |
-| [docs/PRCL_Paper.md](docs/PRCL_Paper.md) | Full research paper (all sections, placeholder results) |
-| [docs/PRCL_Intermediate_Report.tex](docs/PRCL_Intermediate_Report.tex) | LaTeX intermediate report with illustrative results |
 
 ---
 
