@@ -11,9 +11,11 @@ from omegaconf import DictConfig, OmegaConf
 # Add src to path for clean imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from prcl.datasets.cifar import build_eval_dataloader, build_ssl_dataloader
+from prcl.datasets.cifar import build_eval_dataloader, build_ssl_dataloader, get_cifar10, get_cifar100
 from prcl.eval.linear_probe import train_linear_probe
 from prcl.integritysuite.run_manager import create_run_dir, save_metrics
+from prcl.integritysuite.schemas import ForensicMetrics, RunMetrics
+from prcl.integritysuite.cards import generate_run_card
 from prcl.ssl.methods.simclr_transforms import get_simclr_transform
 from prcl.ssl.train_loop import train_simclr
 
@@ -40,7 +42,12 @@ def main(cfg: DictConfig):
     logger.info("Resolved config:\n" + OmegaConf.to_yaml(cfg))
 
     set_seed(cfg.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     logger.info(f"Device: {device}")
 
     # Create run directory
@@ -59,9 +66,6 @@ def main(cfg: DictConfig):
     poison_indices = None
     poison_fn = None
     if attack_adapter is not None:
-        # Determine dataset size for index selection
-        from prcl.datasets.cifar import get_cifar10, get_cifar100
-
         if cfg.dataset.name == "cifar10":
             _base = get_cifar10(cfg.dataset.data_dir, train=True)
         elif cfg.dataset.name == "cifar100":
@@ -144,16 +148,106 @@ def main(cfg: DictConfig):
         device=device,
     )
 
-    # Save final metrics
+    # Save eval metrics
     import json
     metrics_path = run_path / "metrics.json"
     with open(metrics_path) as f:
         metrics = json.load(f)
     metrics["eval"] = probe_results
     save_metrics(run_path, metrics)
+    logger.info(f"Linear probe accuracy: {probe_results['linear_probe_acc']:.4f}")
 
-    logger.info(f"Done! Linear probe accuracy: {probe_results['linear_probe_acc']:.4f}")
-    logger.info(f"All artifacts saved to: {run_path}")
+    # --- ASR evaluation (when attack is active) ---
+    asr_result = None
+    if attack_adapter is not None:
+        from prcl.eval.asr_eval import TriggeredDataset, evaluate_asr
+        from prcl.eval.linear_probe import LinearProbe
+        from torch.utils.data import DataLoader
+
+        # Train a fresh linear probe for ASR measurement
+        asr_probe = LinearProbe(model.backbone, model.feat_dim, num_classes).to(device)
+        asr_probe_optim = torch.optim.SGD(asr_probe.classifier.parameters(), lr=cfg.eval.lr, momentum=0.9)
+        asr_probe_sched = torch.optim.lr_scheduler.CosineAnnealingLR(asr_probe_optim, T_max=cfg.eval.epochs)
+        criterion_ce = torch.nn.CrossEntropyLoss()
+        asr_probe.train()
+        for _ep in range(cfg.eval.epochs):
+            for imgs, labels in eval_train_loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                logits = asr_probe(imgs)
+                loss = criterion_ce(logits, labels)
+                asr_probe_optim.zero_grad()
+                loss.backward()
+                asr_probe_optim.step()
+            asr_probe_sched.step()
+
+        if cfg.dataset.name == "cifar10":
+            base_test = get_cifar10(cfg.dataset.data_dir, train=False)
+        elif cfg.dataset.name == "cifar100":
+            base_test = get_cifar100(cfg.dataset.data_dir, train=False)
+        else:
+            from prcl.datasets.stl10 import get_stl10
+            base_test = get_stl10(cfg.dataset.data_dir, split="test")
+
+        triggered_ds = TriggeredDataset(
+            base_dataset=base_test,
+            trigger_fn=attack_adapter.apply_trigger,
+            target_class=cfg.attack.target_class,
+            transform=eval_transform,
+        )
+        triggered_loader = DataLoader(triggered_ds, batch_size=cfg.eval.batch_size, num_workers=cfg.dataset.num_workers)
+        asr_result = evaluate_asr(model.backbone, asr_probe.classifier, triggered_loader, cfg.attack.target_class, device)
+        metrics["asr"] = asr_result
+        save_metrics(run_path, metrics)
+        logger.info(f"ASR: {asr_result['asr']:.4f}")
+
+    # --- Forensic evaluation (when defense + attack active) ---
+    forensic_result = None
+    if prcl_defense is not None and attack_adapter is not None:
+        import numpy as np
+        from prcl.eval.forensics import evaluate_forensics
+
+        all_scores = []
+        model.eval()
+        with torch.no_grad():
+            for (view1, _view2), indices in train_loader:
+                view1 = view1.to(device)
+                h = model.backbone(view1)
+                scores = prcl_defense.pcf_scorer.compute_scores(view1, model.backbone, h)
+                all_scores.append((indices.numpy(), scores.cpu().numpy()))
+        idx_all = np.concatenate([s[0] for s in all_scores])
+        score_all = np.concatenate([s[1] for s in all_scores])
+        ordered = np.argsort(idx_all)
+        score_all = score_all[ordered]
+        poison_mask = train_dataset.poison_mask[: len(score_all)]
+        forensic_result = evaluate_forensics(score_all, poison_mask)
+        metrics["forensics"] = forensic_result.model_dump()
+        save_metrics(run_path, metrics)
+        logger.info(f"Forensic ROC-AUC: {forensic_result.roc_auc:.4f}")
+
+    # --- Generate run card ---
+    run_metrics = RunMetrics(
+        dataset=cfg.dataset.name,
+        backbone=cfg.model.backbone,
+        ssl_method=cfg.ssl.method,
+        defense_mode=cfg.defense.name if cfg.defense.enabled else "none",
+        attack_family=cfg.attack.name if cfg.attack.enabled else "none",
+        poison_ratio=cfg.attack.poison_ratio if cfg.attack.enabled else 0.0,
+        seed=cfg.seed,
+        linear_probe_acc=probe_results.get("linear_probe_acc"),
+        asr=asr_result["asr"] if asr_result else None,
+        final_train_loss=metrics.get("summary", {}).get("final_loss"),
+        total_train_time=metrics.get("summary", {}).get("total_train_time"),
+        train_time_per_epoch=metrics.get("summary", {}).get("avg_epoch_time"),
+        epochs_completed=cfg.ssl.epochs,
+    )
+    generate_run_card(
+        run_path,
+        run_metrics,
+        forensic_metrics=forensic_result,
+        attack_metadata=attack_adapter.get_metadata() if attack_adapter else None,
+    )
+
+    logger.info(f"Done! All artifacts saved to: {run_path}")
 
 
 if __name__ == "__main__":

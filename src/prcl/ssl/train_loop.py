@@ -7,7 +7,6 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from prcl.ssl.backbones.resnet import get_backbone
@@ -94,7 +93,7 @@ def train_simclr(cfg, train_loader, run_path: Path, device: torch.device,
     scheduler = build_scheduler(optimizer, cfg, len(train_loader))
 
     use_amp = cfg.ssl.use_amp and device.type == "cuda"
-    scaler = GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     epoch_metrics = []
     best_loss = float("inf")
@@ -123,7 +122,7 @@ def train_simclr(cfg, train_loader, run_path: Path, device: torch.device,
 
             optimizer.zero_grad(set_to_none=True)
 
-            with autocast(enabled=use_amp):
+            with torch.amp.autocast(device.type, enabled=use_amp):
                 # Forward pass: encode both views
                 x = torch.cat([view1, view2], dim=0)
                 h, z = model(x)
