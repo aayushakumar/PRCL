@@ -42,7 +42,6 @@ PRCL ships with **IntegritySuite**, a reproducibility harness that standardizes 
 - [IntegritySuite](#integritysuite)
 - [Test Suite](#test-suite)
 - [Ethics & Safety](#ethics--safety)
-- [Citation](#citation)
 
 ---
 
