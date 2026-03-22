@@ -4,7 +4,6 @@
 
 **A during-pretraining, label-free backdoor defense for self-supervised contrastive learning.**
 
-[![IEEE Access](https://img.shields.io/badge/Paper-IEEE%20Access%202026-blue)](paper/prcl_ieee_access.pdf)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-orange)](https://pytorch.org)
 [![Tests](https://img.shields.io/badge/Tests-99%20passed-brightgreen)]()
@@ -49,7 +48,7 @@ PRCL ships with **IntegritySuite**, a reproducibility harness that standardizes 
 
 ## The Problem
 
-Modern SSL methods (SimCLR, MoCo, BYOL) learn visual features from **large, uncurated image datasets** — often scraped from the web without human verification. An attacker who controls as little as 1–5% of this data can implant a **backdoor**: the resulting encoder works fine on normal images but systematically misclassifies any input containing a trigger pattern after downstream fine-tuning.
+Modern SSL methods (SimCLR, MoCo, BYOL) learn visual features from **large, uncurated image datasets**,  often scraped from the web without human verification. An attacker who controls as little as 1–5% of this data can implant a **backdoor**: the resulting encoder works fine on normal images but systematically misclassifies any input containing a trigger pattern after downstream fine-tuning.
 
 Three properties make this uniquely hard to defend:
 
@@ -566,21 +565,6 @@ python scripts/train.py attack=patch_backdoor
 
 Safe defaults: `attack=none` is the default config. Attack metadata is always logged for audit. See [docs/responsible_release.md](docs/responsible_release.md) for the full policy.
 
----
-
-## Citation
-
-If you use PRCL in your research, please cite:
-
-```bibtex
-@article{kumar2026prcl,
-  title   = {{PRCL}: Poison-Robust Contrastive Learning via Probe-Consistency Forensics},
-  author  = {Kumar, Aayush},
-  journal = {IEEE Access},
-  year    = {2026},
-  url     = {https://github.com/aayushakumar/PRCL}
-}
-```
 
 ---
 
