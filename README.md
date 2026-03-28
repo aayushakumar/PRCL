@@ -1,4 +1,4 @@
-# PRCL — Poison-Robust Contrastive Learning
+# PRCL: Poison-Robust Contrastive Learning
 
 <div align="center">
 
@@ -54,7 +54,7 @@ Three properties make this uniquely hard to defend:
 | Challenge | Why It Matters |
 |-----------|----------------|
 | **No labels during pretraining** | Label-based anomaly detection (Spectral Signatures, ABL) cannot apply |
-| **No clean reference set** | All data is potentially contaminated — nothing to compare against |
+| **No clean reference set** | All data is potentially contaminated - nothing to compare against |
 | **Clean accuracy stays high** | Standard benchmarking doesn't reveal the backdoor |
 
 ---
@@ -68,11 +68,11 @@ Web-scraped data ──► PRCL + SimCLR ──► Clean encoder
 
 PRCL integrates three mechanisms directly into the contrastive training loop:
 
-1. **Probe-Consistency Forensics (PCF)** — scores each sample's suspicion by measuring how much its representation shifts under targeted perturbations
-2. **Robust Weighted InfoNCE** — reweights suspicious samples in both positive and negative pair terms, with gradient capping for bounded influence
-3. **Quarantine Buffer** *(optional)* — excludes persistently suspicious samples under extreme contamination
+1. **Probe-Consistency Forensics (PCF)** - scores each sample's suspicion by measuring how much its representation shifts under targeted perturbations
+2. **Robust Weighted InfoNCE** - reweights suspicious samples in both positive and negative pair terms, with gradient capping for bounded influence
+3. **Quarantine Buffer** *(optional)* - excludes persistently suspicious samples under extreme contamination
 
-**Key design principle:** PRCL *reweights* rather than removes. By keeping all samples with a minimum weight floor, it preserves more training signal than filter-based approaches — which is why it simultaneously achieves lower ASR *and* higher clean accuracy than all six baselines we compare against.
+**Key design principle:** PRCL *reweights* rather than removes. By keeping all samples with a minimum weight floor, it preserves more training signal than filter-based approaches - which is why it simultaneously achieves lower ASR *and* higher clean accuracy than all six baselines we compare against.
 
 ---
 
@@ -99,7 +99,7 @@ PRCL integrates three mechanisms directly into the contrastive training loop:
 │                                                    │   w_pos·L, C)      │   │
 │                       ┌──────────────────────┐     └────────────────────┘   │
 │                       │  Quarantine Buffer   │                              │
-│                       │  (optional, ρ > 5%)  │  Weights are DETACHED —      │
+│                       │  (optional, ρ > 5%)  │  Weights are DETACHED -      │
 │                       │  EMA tracking α=0.3  │  no gradient through q       │
 │                       └──────────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -170,7 +170,7 @@ The formal loss:
 
   where  w_pos(i)   = max(w_min, 1 - λ_pos · q(xᵢ))
          w_neg(i,j) = max(w_min, 1 - λ_neg · q(xⱼ))
-         All weights are detached — zero gradient through q
+         All weights are detached - zero gradient through q
 ```
 
 **Bounded Influence Theorem:** Under PRCL's combined reweighting and gradient capping, the per-sample gradient contribution satisfies:
@@ -208,7 +208,7 @@ CIFAR-10, patch and blend backdoor attacks (ACC ↑ and ASR ↓):
 
 | Defense | Type | Patch ρ=1% ACC | Patch ρ=1% ASR | Patch ρ=5% ACC | Patch ρ=5% ASR | Blend ρ=1% ASR | Blend ρ=5% ASR |
 |---------|------|:--------------:|:--------------:|:--------------:|:--------------:|:--------------:|:--------------:|
-| No defense | — | 87.9 | 58.7 | 87.2 | 82.4 | 47.1 | 73.8 |
+| No defense | - | 87.9 | 58.7 | 87.2 | 82.4 | 47.1 | 73.8 |
 | Spectral Sig.† | During | 86.6 | 32.4 | 85.4 | 54.8 | 39.8 | 58.3 |
 | ABL† | During | 86.1 | 36.2 | 84.7 | 59.4 | 37.5 | 56.7 |
 | SSD† | During | 87.0 | 27.9 | 85.9 | 49.2 | 32.1 | 51.4 |
@@ -256,13 +256,13 @@ ROC-AUC of suspicion scores vs. ground-truth poison labels (higher = better; lab
 |--------|---------|:----:|:----:|:-----:|
 | Patch | CIFAR-10 | **0.91** | 0.88 | 0.83 |
 | Patch | CIFAR-100 | 0.89 | 0.85 | 0.80 |
-| Patch | STL-10 | 0.90 | 0.86 | — |
+| Patch | STL-10 | 0.90 | 0.86 | - |
 | Blend | CIFAR-10 | 0.82 | 0.78 | 0.73 |
 | Blend | CIFAR-100 | 0.79 | 0.74 | 0.69 |
 
 Patch attacks yield high AUC (0.83–0.91) because blur/occlusion probes effectively disrupt localized triggers. Blend attacks are harder due to distributed patterns (0.69–0.82), but still well above the 0.5 random baseline.
 
-**Score distribution** (CIFAR-10, Patch, ρ=1%): poisoned samples cluster at high suspicion scores with clear separation from clean samples — enabling identification with no label information.
+**Score distribution** (CIFAR-10, Patch, ρ=1%): poisoned samples cluster at high suspicion scores with clear separation from clean samples - enabling identification with no label information.
 
 ### Utility Preservation
 
@@ -277,7 +277,7 @@ PRCL's accuracy cost on **clean data** (no attack), across datasets and backbone
 | STL-10 | ResNet-18 | 82.6 | 81.2 | −1.4 |
 | STL-10 | ResNet-50 | 85.1 | 83.6 | −1.5 |
 
-The 1.3–1.5% cost is **constant across model scales** — PRCL does not become more expensive with larger encoders.
+The 1.3–1.5% cost is **constant across model scales** - PRCL does not become more expensive with larger encoders.
 
 ### Ablation Study
 
@@ -286,7 +286,7 @@ Component contributions (CIFAR-10, Patch, ρ=1%):
 ```
 Configuration              ACC      ASR      ASR reduction
 ─────────────────────────  ──────   ──────   ─────────────
-No defense                 87.9%    58.7%    —
+No defense                 87.9%    58.7%    -
 PCF scoring only           87.7%    51.2%    -7.5 pp
 + Positive reweighting     87.6%    34.8%    -23.9 pp  ← biggest single gain
 + Negative sanitization    87.5%    39.1%    -12.2 pp
@@ -326,7 +326,7 @@ python -m pytest tests/ -x -q
 
 ## Quick Start
 
-All commands use [Hydra](https://hydra.cc/) — every parameter is overridable from the CLI.
+All commands use [Hydra](https://hydra.cc/) - every parameter is overridable from the CLI.
 
 ```bash
 # 1. Clean SimCLR baseline
@@ -548,7 +548,7 @@ ruff check src/ tests/ scripts/
 
 ## Ethics & Safety
 
-This is a **defense research** project. Attack adapters implement previously published, well-understood attack patterns — no novel offensive capabilities are introduced.
+This is a **defense research** project. Attack adapters implement previously published, well-understood attack patterns - no novel offensive capabilities are introduced.
 
 ### Two-Gate Safety System
 
@@ -569,4 +569,4 @@ Safe defaults: `attack=none` is the default config. Attack metadata is always lo
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
